@@ -7,3 +7,5 @@ accelerate==0.25.0
 datasets==2.15.0
 huggingface-hub==0.20.2
 pillow==10.1.0
+python-dotenv==1.0.0
+matplotlib==3.8.2
