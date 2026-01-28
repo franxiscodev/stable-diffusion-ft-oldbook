@@ -1,0 +1,80 @@
+# ====================================
+# ENTORNO VIRTUAL Y PYTHON
+# ====================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+
+# ====================================
+# CONFIGURACIONES DEL SISTEMA
+# ====================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ====================================
+# CARPETAS PERSONALES DEL PROYECTO
+# ====================================
+plan/          # Tus planes de trabajo
+notas/         # Notas personales
+material/      # Material de referencia
+outputs/       # Modelos entrenados
+generated/     # Imágenes generadas
+checkpoints/   # Puntos de guardado del entrenamiento
+
+# ====================================
+# DATASETS Y MODELOS (ARCHIVOS GRANDES)
+# ====================================
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.h5
+*.hdf5
+data/          # Datasets descargados (excepto scripts)
+*.zip
+*.tar
+*.gz
+*.7z
+
+# ====================================
+# CACHÉ DE HUGGING FACE
+# ====================================
+~/.cache/huggingface/
+.huggingface/
+
+
+# ====================================
+# JUPYTER NOTEBOOKS (si usas)
+# ====================================
+.ipynb_checkpoints/
+
+
