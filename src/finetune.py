@@ -20,8 +20,10 @@ from accelerate import Accelerator
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from PIL import Image
+from PIL import Image, ImageFile
 import os
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 from tqdm import tqdm
 
 from src.config import (
