@@ -21,6 +21,7 @@ from src.config import (
     OUTPUT_DIR,
     GENERATED_DIR,
     EVAL_PROMPT,
+    RESOLUTION,
 )
 
 
@@ -30,7 +31,7 @@ def generate_before(prompt, device):
         PRETRAINED_MODEL_NAME,
     ).to(device)
 
-    image = pipe(prompt).images[0]
+    image = pipe(prompt, height=RESOLUTION, width=RESOLUTION).images[0]
 
     del pipe
     if device == "cuda":
@@ -49,7 +50,7 @@ def generate_after(prompt, device):
         unet=finetuned_unet,
     ).to(device)
 
-    image = pipe(prompt).images[0]
+    image = pipe(prompt, height=RESOLUTION, width=RESOLUTION).images[0]
 
     del pipe
     if device == "cuda":

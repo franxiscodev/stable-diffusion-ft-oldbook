@@ -5,27 +5,13 @@ Sigue el patron del notebook del docente (2.finetuning_stable_diffusion.ipynb)
 con 3 adaptaciones:
   1. Columna de imagen: "1600px" (en vez de "image")
   2. Columna de caption: "info_alt" (en vez de "text")
-  3. Transforms: Resize(512) + CenterCrop(512) (en vez de Resize(512,512))
+  3. Transforms: Resize + CenterCrop (en vez de Resize((512,512)))
 
 Uso:
-  python src/finetune.py
+  python -m src.finetune
 """
 
 # --- Imports ---
-from diffusers import StableDiffusionPipeline, DDPMScheduler
-from diffusers import UNet2DConditionModel, AutoencoderKL
-from transformers import CLIPTextModel, CLIPTokenizer
-from datasets import load_dataset
-from accelerate import Accelerator
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-from PIL import Image, ImageFile
-import os
-
-ImageFile.LOAD_TRUNCATED_IMAGES = True
-from tqdm import tqdm
-
 from src.config import (
     PRETRAINED_MODEL_NAME,
     DATASET_NAME,
@@ -40,7 +26,49 @@ from src.config import (
     CHECKPOINT_DIR,
     GENERATED_DIR,
     EVAL_PROMPT,
+    PROJECT_ROOT,
 )
+from tqdm import tqdm
+from diffusers import StableDiffusionPipeline, DDPMScheduler
+from diffusers import UNet2DConditionModel, AutoencoderKL
+from transformers import CLIPTextModel, CLIPTokenizer
+from datasets import load_dataset
+from accelerate import Accelerator
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image, ImageFile
+import os
+
+import time
+from datetime import datetime, timedelta
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# --- Log file ---
+LOG_DIR = PROJECT_ROOT / "outputs"
+LOG_FILE = LOG_DIR / "training_log.txt"
+
+
+def log(msg, log_file=None):
+    """Print y escribe a fichero de log."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {msg}"
+    print(line)
+    if log_file is not None:
+        log_file.write(line + "\n")
+        log_file.flush()
+
+
+def format_eta(seconds):
+    """Formatea segundos a string legible (ej: 1h 42m)."""
+    if seconds < 0:
+        return "N/A"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    if h > 0:
+        return f"{h}h {m:02d}m"
+    return f"{m}m {int(seconds % 60):02d}s"
 
 
 def main():
@@ -48,16 +76,27 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
+    # --- Preparar log ---
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = open(LOG_FILE, "w", encoding="utf-8")
+
+    log(f"Device: {device}", log_file)
+    log(f"Config: RESOLUTION={RESOLUTION}, BATCH_SIZE={BATCH_SIZE}, "
+        f"MAX_TRAIN_SAMPLES={MAX_TRAIN_SAMPLES}, "
+        f"NUM_EPOCHS={NUM_EPOCHS}, LR={LEARNING_RATE}", log_file)
+
     # --- Generar imagen ANTES del fine-tuning ---
-    print("\n--- Generando imagen ANTES del fine-tuning ---")
+    log("--- Generando imagen ANTES del fine-tuning ---", log_file)
     pipe = StableDiffusionPipeline.from_pretrained(
         PRETRAINED_MODEL_NAME,
     ).to(device)
 
-    image_before = pipe(EVAL_PROMPT).images[0]
+    image_before = pipe(
+        EVAL_PROMPT, height=RESOLUTION, width=RESOLUTION
+    ).images[0]
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     image_before.save(GENERATED_DIR / "before_finetuning.png")
-    print(f"Imagen guardada en {GENERATED_DIR / 'before_finetuning.png'}")
+    log(f"Imagen guardada en {GENERATED_DIR / 'before_finetuning.png'}", log_file)
 
     # Liberar memoria
     del pipe
@@ -65,18 +104,18 @@ def main():
         torch.cuda.empty_cache()
 
     # --- Cargar dataset ---
-    print("\n--- Cargando dataset ---")
+    log("--- Cargando dataset ---", log_file)
     dataset = load_dataset(DATASET_NAME, split="train")
     if MAX_TRAIN_SAMPLES:
         dataset = dataset.select(range(MAX_TRAIN_SAMPLES))
-    print(f"Muestras de entrenamiento: {len(dataset)}")
+    log(f"Muestras de entrenamiento: {len(dataset)}", log_file)
 
     # Comprobar tamano de imagen
     size = dataset[0][IMAGE_COLUMN].size
-    print(f"Tamano de las imagenes del dataset: {size}")
+    log(f"Tamano de las imagenes del dataset: {size}", log_file)
 
     # --- Definir transforms ---
-    # CAMBIO 3: Resize(512) + CenterCrop(512) en vez de Resize((512,512))
+    # Resize + CenterCrop en vez de Resize((R,R))
     # porque las imagenes del dataset no son cuadradas
     image_transforms = transforms.Compose([
         transforms.Resize(RESOLUTION),
@@ -86,7 +125,7 @@ def main():
     ])
 
     # --- Cargar componentes individuales ---
-    print("\n--- Cargando componentes del modelo ---")
+    log("--- Cargando componentes del modelo ---", log_file)
 
     # Tokenizador
     tokenizer = CLIPTokenizer.from_pretrained(
@@ -160,19 +199,30 @@ def main():
     unet, optimizer, train_dataloader = accelerator.prepare(
         unet, optimizer, train_dataloader
     )
-    print(f"Accelerator device: {accelerator.device}")
+    log(f"Accelerator device: {accelerator.device}", log_file)
 
     # --- Training loop ---
-    print(f"\n--- Iniciando entrenamiento: {NUM_EPOCHS} epochs ---")
+    batches_per_epoch = len(train_dataloader)
+    total_batches = NUM_EPOCHS * batches_per_epoch
+    log(f"--- Iniciando entrenamiento: {NUM_EPOCHS} epochs, "
+        f"{batches_per_epoch} batches/epoch, {total_batches} batches total ---",
+        log_file)
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
+    global_step = 0
+    start_time = time.time()
+    last_checkpoint_pct = 0  # ultimo % en que se guardo checkpoint
+
     for epoch in range(NUM_EPOCHS):
+        epoch_start = time.time()
         epoch_losses = []
         progress_bar = tqdm(
             train_dataloader, desc=f"Epoch {epoch + 1}/{NUM_EPOCHS}"
         )
 
         for batch in progress_bar:
+            batch_start = time.time()
+
             # Pasar pixeles al espacio latente con el encoder del VAE
             with torch.no_grad():
                 latents = vae.encode(
@@ -188,7 +238,8 @@ def main():
                 (latents.shape[0],),
                 device=latents.device,
             ).long()
-            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+            noisy_latents = noise_scheduler.add_noise(
+                latents, noise, timesteps)
 
             # Codificar texto
             encoder_hidden_states = text_encoder(
@@ -207,25 +258,61 @@ def main():
             optimizer.zero_grad()
 
             epoch_losses.append(loss.item())
-            progress_bar.set_postfix(loss=loss.item())
+            global_step += 1
+            batch_time = time.time() - batch_start
 
-        # Logging de loss promedio por epoch
+            # Progreso global
+            pct = global_step / total_batches * 100
+            elapsed = time.time() - start_time
+            avg_time_per_batch = elapsed / global_step
+            eta_seconds = avg_time_per_batch * (total_batches - global_step)
+
+            progress_bar.set_postfix(
+                loss=f"{loss.item():.4f}",
+                pct=f"{pct:.0f}%",
+                eta=format_eta(eta_seconds),
+            )
+
+            # Log detallado cada 10 batches
+            if global_step % 10 == 0 or global_step == 1:
+                log(f"[Batch {global_step}/{total_batches}] "
+                    f"[Global {pct:.0f}%] "
+                    f"Loss: {loss.item():.4f} | "
+                    f"{batch_time:.1f}s/batch | "
+                    f"ETA: {format_eta(eta_seconds)}", log_file)
+
+            # Checkpoint cada 10% de progreso
+            current_pct_bucket = int(pct // 10) * 10
+            if current_pct_bucket > last_checkpoint_pct and current_pct_bucket > 0:
+                last_checkpoint_pct = current_pct_bucket
+                ckpt_path = CHECKPOINT_DIR / f"checkpoint-pct-{current_pct_bucket}"
+                unet.save_pretrained(ckpt_path)
+                log(f"--- Checkpoint {current_pct_bucket}% guardado en "
+                    f"{ckpt_path} ---", log_file)
+
+        # Fin de epoch
+        epoch_time = time.time() - epoch_start
         avg_loss = sum(epoch_losses) / len(epoch_losses)
-        print(f"Epoch {epoch + 1}/{NUM_EPOCHS} - Loss promedio: {avg_loss:.6f}")
+        log(f"Epoch {epoch + 1}/{NUM_EPOCHS} completado - "
+            f"Loss promedio: {avg_loss:.6f} - "
+            f"Tiempo: {format_eta(epoch_time)}", log_file)
 
-        # Checkpoint cada epoch
+        # Checkpoint al final de cada epoch
         checkpoint_path = CHECKPOINT_DIR / f"checkpoint-epoch-{epoch + 1}"
         unet.save_pretrained(checkpoint_path)
-        print(f"Checkpoint guardado en {checkpoint_path}")
+        log(f"Checkpoint epoch guardado en {checkpoint_path}", log_file)
 
     # --- Guardar modelo final ---
-    print(f"\n--- Guardando modelo final ---")
+    total_time = time.time() - start_time
+    log(f"--- Guardando modelo final (tiempo total: {format_eta(total_time)}) ---",
+        log_file)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     unet.save_pretrained(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
-    print(f"Modelo guardado en {OUTPUT_DIR}")
+    log(f"Modelo guardado en {OUTPUT_DIR}", log_file)
 
-    print("\nEntrenamiento completado.")
+    log("Entrenamiento completado.", log_file)
+    log_file.close()
 
 
 if __name__ == "__main__":

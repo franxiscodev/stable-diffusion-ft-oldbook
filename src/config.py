@@ -23,11 +23,11 @@ PRETRAINED_MODEL_NAME = "CompVis/stable-diffusion-v1-4"
 DATASET_NAME = "gigant/oldbookillustrations"
 IMAGE_COLUMN = "1600px"
 CAPTION_COLUMN = "info_alt"
-MAX_TRAIN_SAMPLES = None  # None = usar todo el dataset
+MAX_TRAIN_SAMPLES = 1000  # None = usar todo el dataset
 
 # --- Hiperparametros ---
-RESOLUTION = 512
-BATCH_SIZE = 6
+RESOLUTION = 256
+BATCH_SIZE = 4
 NUM_EPOCHS = 2
 LEARNING_RATE = 1e-5
 
